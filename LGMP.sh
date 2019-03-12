@@ -155,6 +155,12 @@ read -sp "After installation, once you've chosen the option to continue testing 
 #---------------------------------------------------begin stage two---------------------------------------------------#
 
 echo
+
+# query for trim usage
+echo -e "If you are installing to an SSD, you can enable trim. Beware, some SSD\nmanufacturers advise against the use of trim with their drives! The use of trim\nwith encryption also presents some security concerns in that, while it may not\nexpose encrypted data, it may expose information about encrypted data. If you\nare unsure, don't enable, and be sure to check your manufacturer\nrecommendations. Also, if you plan to use LVM snapshots, do not enable trim."
+read -p "Enable trim [y/N]: " trim
+doTrim() { [ "${trim,,}" == 'y' ] || return -1; }
+
 # mount stuff for chroot
 echo -n "Mounting the installed system ... "
 mount /dev/vg0/root /mnt
@@ -171,6 +177,32 @@ luksUUID="$(blkid | grep $luksPart | tr -d '"' | grep -oP "\bUUID=[0-9a-f\-]+")"
 echo -e "os\t$luksUUID\tnone\tluks" > /mnt/etc/crypttab
 chmod 600 /mnt/etc/crypttab
 echo "done"
+
+# enable trim if requested
+# trim implemented using instructions found at http://blog.neutrino.es/2013/howto-properly-activate-trim-for-your-ssd-on-linux-fstrim-lvm-and-dmcrypt/
+if doTrim; then
+	echo -n "Enabling trim ... "
+	# enable trim for LUKS
+	sed -i 's/luks$/luks,discard/' /etc/crypttab
+
+	# enable trim in LVM
+	lineStr="$(grep -nP "issue_discards ?=" /etc/lvm/lvm.conf )"
+	lineNum=$(cut -f1 -d: <<< "$lineStr")
+	replaceText="$(cut -f2 -d: <<< "$lineStr" | tr -d '#' | sed 's/issue_discards.*/issue_discards = 1/')"
+	sed -i "${lineNum}s/.*/$replaceText/" /etc/lvm/lvm.conf
+	
+	# enable weekly fstrim
+	allParts="/ /boot /home $(isEFI && echo "/boot/efi")"
+	cat << EOF > /etc/cron.weekly/dofstrim
+#! /bin/sh
+for mount in $allParts
+do
+	fstrim \$mount
+done
+EOF
+	chmod 755 /etc/cron.weekly/dofstrim
+	echo "done"
+fi
 
 # chroot and update the boot files
 echo "Updating your boot files:"

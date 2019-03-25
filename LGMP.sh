@@ -104,7 +104,7 @@ clear
 offset="1M"	#offset for first partition
 physicalParts="boot:ext2 efi:fat16 lvm"
 index=$(bytes $offset)
-for part in ${physicalParts]
+for part in ${physicalParts}
 do
 	name=$(cut -f1 -d: <<< $part)
 	type=$(awk -F ':' '{print $2}' <<< $part)

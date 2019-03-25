@@ -86,25 +86,25 @@ echo  -e 'In addition to the passphrase you provided, a keyfile can be generated
 read -p "Key file size in bytes, or 'none' to prevent key file creation [512]: " keyfileSize
 keyfileSize=${keyfileSize:-512}
 keyfile=/tmp/LUKS.key
-hasKeyfile && dd if=/dev/urandom of="$keyfile" bs=$keyfileSize count=1 2> /dev/null
+hasKeyfile && dd if=/dev/urandom of="${keyfile}" bs=${keyfileSize} count=1 2> /dev/null
 
 clear
 # fill in the blanks with default values
-parts="efi=100M boot=2G lvm=-1MB swap=$totalRAM root=32G home=100%"
+parts="efi=100M boot=2G lvm=-1MB swap=${totalRAM} root=32G home=100%"
 for part in $parts
 do
 	name=$(cut -f1 -d= <<< $part)
 	[ "$name" == "efi" ] && ! isEFI && continue
-	[ ${!name} ] || eval "$part"
+	[ ${!name} ] || eval "${part}"
 done
-grep "%" <<< $home || home="${home}%"
+grep "%" <<< ${home} || home="${home}%"
 
 # create physical partitions
 clear
 offset="1M"	#offset for first partition
 physicalParts="boot:ext2 efi:fat16 lvm"
 index=$(bytes $offset)
-for part in $physicalParts
+for part in ${physicalParts]
 do
 	name=$(cut -f1 -d: <<< $part)
 	type=$(awk -F ':' '{print $2}' <<< $part)
@@ -122,28 +122,28 @@ done
 # setup LUKS encryption
 echo "Setting up encryption:"
 isEFI && luksPart=${disk}3 || luksPart=${disk}2
-echo -n "Encrypting $luksPart with your passphrase ... "
-echo -n "$luksPass" | cryptsetup luksFormat -c aes-xts-plain64 -h sha512 -s 512 -S 1 -d - $luksPart
+echo -n "Encrypting ${luksPart} with your passphrase ... "
+echo -n "${luksPass}" | cryptsetup luksFormat -c aes-xts-plain64 -h sha512 -s 512 --iter-time 5000 --use-random -S 1 -d - ${luksPart}
 echo "done"
 if hasKeyfile; then
-	echo -n "Adding key file as a decryption option for $luksPart ... "
-	cryptsetup luksAddKey $luksPart "$keyfile" <<< "$luksPass"
+	echo -n "Adding key file as a decryption option for ${luksPart} ... "
+	cryptsetup luksAddKey ${luksPart} "${keyfile}" <<< "${luksPass}"
 	echo "done"
 fi
 
 # unlock LUKS partition
-echo -n "$luksPass" | cryptsetup luksOpen $luksPart os
+echo -n "$luksPass" | cryptsetup luksOpen ${luksPart} ${luksPart}_crypt
 
 # setup LVM and create logical partitions
 echo "Setting up LVM:"
-pvcreate /dev/mapper/os > /dev/null 2>&1
-vgcreate vg0 /dev/mapper/os > /dev/null 2>&1
-echo -n "Creating $swap swap logical volume ... "
-lvcreate -n swap -L $swap vg0 > /dev/null 2>&1 && echo done || echo failed
-echo -n "Creating $root root logical volume ... "
-lvcreate -n root -L $root vg0 > /dev/null 2>&1 && echo done || echo failed
+pvcreate /dev/mapper/${luksPart}_crypt > /dev/null 2>&1
+vgcreate vg0 /dev/mapper/${luksPart}_crypt > /dev/null 2>&1
+echo -n "Creating ${swap} swap logical volume ... "
+lvcreate -n swap -L ${swap} vg0 > /dev/null 2>&1 && echo done || echo failed
+echo -n "Creating ${root} root logical volume ... "
+lvcreate -n root -L ${root} vg0 > /dev/null 2>&1 && echo done || echo failed
 homeSpace=$(bc <<< "$(vgdisplay --units b | grep Free | awk '{print $7}') * $(tr -d '%' <<< $home) / 100" | numfmt --to=iec)
-echo -n "Creating $homeSpace home logical volume ... "
+echo -n "Creating ${homeSpace} home logical volume ... "
 lvcreate -n home -l +${home}free vg0 > /dev/null 2>&1 && echo done || echo failed
 
 # stage one complete; pause and wait for user to perform installation
@@ -174,7 +174,7 @@ echo "done"
 # create crypttab entry
 echo -n "Creating /etc/crypttab entry ... "
 luksUUID="$(blkid | grep $luksPart | tr -d '"' | grep -oP "\bUUID=[0-9a-f\-]+")"
-echo -e "os\t$luksUUID\tnone\tluks" > /mnt/etc/crypttab
+echo -e "${luksPart}_crypt\t${luksUUID}\tnone\tluks" > /mnt/etc/crypttab
 chmod 600 /mnt/etc/crypttab
 echo "done"
 

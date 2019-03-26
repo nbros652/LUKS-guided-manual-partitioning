@@ -122,6 +122,7 @@ done
 # setup LUKS encryption
 echo "Setting up encryption:"
 isEFI && luksPart=${disk}3 || luksPart=${disk}2
+echo -e "We're going to need some random data for this next step. If it takes long, try \nmoving the mouse around or typing on the keyboard in a different window."
 echo -n "Encrypting ${luksPart} with your passphrase ... "
 echo -n "${luksPass}" | cryptsetup luksFormat -c aes-xts-plain64 -h sha512 -s 512 --iter-time 5000 --use-random -S 1 -d - ${luksPart}
 echo "done"
@@ -377,12 +378,12 @@ keyfile=/tmp/LUKS.key
 # decrypt LUKS partition
 echo -n "Decrypting LUKS partition ... "
 if hasKeyfile && extractPayload; then
-	cryptsetup open $luksPart os -d "\$keyfile"
+	cryptsetup open $luksPart ${luksPart}_crypt -d "\$keyfile"
 	echo "done"
 else
 	echo "waiting for passphrase"
 	read -sp "LUKS encryption passphrase: " luksPass && echo
-	echo -n "\$luksPass" | cryptsetup open $luksPart os || exit
+	echo -n "\$luksPass" | cryptsetup open $luksPart ${luksPart}_crypt || exit
 	echo "LUKS partition successfully decrypted"
 fi
 

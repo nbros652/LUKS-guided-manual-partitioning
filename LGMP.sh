@@ -591,7 +591,7 @@ chmod u+x "$dest/"*.sh
 chown -R 1000:1000 "$dest"
 
 echo
-echo  -e"${green}All finished!${normalText}"
+echo  -e"${green}All finished! ${normalText}"
 echo -e "After rebooting your system, you will be able to decrypt with the passphrase you\nprovided or the key file you saved."
 read -sp "Press [Enter] to reboot" && echo
 reboot

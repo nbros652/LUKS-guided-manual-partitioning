@@ -44,32 +44,15 @@ read -p "To continue, type ERASE in all caps: " opt
 [ "$opt" != "ERASE" ] && echo -e "No changes made!" && read -p "Press [Enter] to exit." && exit
 clear
 
-# disable and remove any active LVM partitions
+# disable any active LVM partitions
 lvs=$(lvs --noheadings --rows | head -n1)
 if [ ! -z "$lvs" ]; then
-	echo -e "${yellow}${boldText}Found LVM logical volumes: ${lvs}${normalText}"
-	read -p "Remove these [Y/n]: " opt
-	if [ "${opt,,}" != 'n' ]; then
-		echo -n "Removing LVM stuff ... "
-		for lv in $lvs
-		do
-			lvchange -an $lv > /dev/null 2>&1
-			lvremove -yf $lv > /dev/null 2>&1
-		done
-		vgs=$(vgs --noheadings --row | head -n1)
-		for vg in $vgs
-		do
-			vgremove -fy $vg > /dev/null 2>&1
-		done
-		pvs=$(pvs --noheadings --row | head -n1)
-		for pv in $pvs
-		do
-			pvremove -fy $pv > /dev/null 2>&1
-		done
-		echo -e "${green}done${normalText}"
-	else
-		echo "Leaving LVM stuff in place. This could be problematic."
-	fi
+	echo -n "Deactivating LVM volumes ... "
+	for lv in $lvs
+	do
+		lvchange -an $lv > /dev/null 2>&1
+	done
+	echo -e "${green}done${normalText}"
 fi
 
 # close any open LUKS disks

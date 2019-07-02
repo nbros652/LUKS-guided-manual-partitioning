@@ -1,6 +1,12 @@
 #!/bin/bash
 # desc: setup partition and system info
 
+# text formatting codes
+normalText='\e[0m'
+boldText='\e[1m'
+yellow='\e[93m'
+green='\e[92m'
+red='\e[91m'
 
 #---------------------------------------------------begin stage one---------------------------------------------------#
 
@@ -38,6 +44,43 @@ read -p "To continue, type ERASE in all caps: " opt
 [ "$opt" != "ERASE" ] && echo -e "No changes made!" && read -p "Press [Enter] to exit." && exit
 clear
 
+# disable and remove any active LVM partitions
+lvs=$(lvs --noheadings --rows | head -n1)
+if [ ! -z "$lvs" ]; then
+	echo -e "${yellow}${boldText}Found LVM logical volumes: ${lvs}${normalText}"
+	read -p "Remove these [Y/n]: " opt
+	if [ "${opt,,}" != 'n' ]; then
+		echo -n "Removing LVM stuff ... "
+		for lv in $lvs
+		do
+			lvchange -an $lv > /dev/null 2>&1
+			lvremove -yf $lv > /dev/null 2>&1
+		done
+		vgs=$(vgs --noheadings --row | head -n1)
+		for vg in $vgs
+		do
+			vgremove -fy $vg > /dev/null 2>&1
+		done
+		pvs=$(pvs --noheadings --row | head -n1)
+		for pv in $pvs
+		do
+			pvremove -fy $pv > /dev/null 2>&1
+		done
+		echo -e "${green}done${normalText}"
+	else
+		echo "Leaving LVM stuff in place. This could be problematic."
+	fi
+fi
+
+# close any open LUKS disks
+find /dev/mapper -type l | while read path
+do
+	dev=$(basename "$path")
+	cryptsetup status $dev > /dev/null 2>&1 || exit
+	echo -n "Closing LUKS device: $dev ... "
+	cryptsetup close $dev && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+done
+	
 # function to convert things like 2G or 1M into bytes
 bytes() {
 	num=${1:-0}
@@ -53,7 +96,7 @@ bounds() {
 }
 
 isEFI() {
-	mount | grep -i efi > /dev/null 2>&1 && return 0 || return 1
+	mount | grep -qi efi && return 0 || return 1
 }
 
 hasKeyfile() {
@@ -62,15 +105,20 @@ hasKeyfile() {
 
 # wipe the disk partition info and create new gpt partition table
 dd if=/dev/zero of=$disk bs=1M count=10 2> /dev/null
-parted $disk mktable gpt > /dev/null 2>&1
+if isEFI; then
+	tableType='gpt'
+else
+	tableType='msdos'
+fi
+parted $disk mktable $tableType > /dev/null 2>&1
 
 # get information about desired sizes
 totalRAM=$(cat /proc/meminfo | head -n1 | grep -oP "\d+.*" | tr -d ' B' | tr 'a-z' 'A-Z' | numfmt --from iec --to iec --format "%.f")
 read -p "Size for /boot [2G]: " boot
 isEFI && read -p "Size for /boot/efi [100M]: " efi
 read -p "Size for LVM [remaining disk space]: " lvm
-read -p "Size for swap (in LVM) [$totalRAM]: " swap
-read -p "Size for / (root -- in LVM) [32G]: " root
+read -p "Size for swap in LVM [$totalRAM]: " swap
+read -p "Size for / (root) in LVM [32G]: " root
 read -p "Percent of remaining LVM space to use for /home [100%]: " home
 echo
 while :
@@ -97,7 +145,7 @@ do
 	[ "$name" == "efi" ] && ! isEFI && continue
 	[ ${!name} ] || eval "${part}"
 done
-grep "%" <<< ${home} || home="${home}%"
+grep -q "%" <<< ${home} || home="${home}%"
 
 # create physical partitions
 clear
@@ -109,11 +157,15 @@ do
 	name=$(cut -f1 -d: <<< $part)
 	type=$(awk -F ':' '{print $2}' <<< $part)
 	[ "$name" == "efi" ] && ! isEFI && continue
-	echo -n "Creating ${!name} $name partition ... "
-	if [ "${!name:0:1}" == "-" ]; then
-		parted $disk -- unit b mkpart primary $type $index ${!name} > /dev/null 2>&1 && echo done || echo failed
+	if [ "${!name}" == "-1MB" ]; then
+		echo -n "Creating $name partition that uses remaining disk space... "
 	else
-		parted $disk unit b mkpart primary $type $(bounds $index ${!name}) > /dev/null 2>&1 && echo done || echo failed
+		echo -n "Creating ${!name} $name partition ... "
+	fi
+	if [ "${!name:0:1}" == "-" ]; then
+		parted $disk -- unit b mkpart primary $type $index ${!name} > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+	else
+		parted $disk unit b mkpart primary $type $(bounds $index ${!name}) > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 		# move index one byte past newly created sector
 		let $[index+=$(bytes ${!name})]
 	fi
@@ -139,35 +191,37 @@ isEFI && efiPart=$(getDiskPartitionByNumber 2)
 echo "Setting up encryption:"
 isEFI && luksPart=$(getDiskPartitionByNumber 3) || luksPart=$(getDiskPartitionByNumber 2)
 cryptMapper="${luksPart/\/dev\/}_crypt"
-echo -e "We're going to need some random data for this next step. If it takes long, try \nmoving the mouse around or typing on the keyboard in a different window."
-echo -n "Encrypting ${luksPart} with your passphrase ... "
+echo -en "  Encrypting ${luksPart} with your passphrase ... "
 echo -n "${luksPass}" | cryptsetup luksFormat -c aes-xts-plain64 -h sha512 -s 512 --iter-time 5000 --use-random -S 1 -d - ${luksPart}
-echo "done"
+echo -e "${green}done${normalText}"
 if hasKeyfile; then
-	echo -n "Adding key file as a decryption option for ${luksPart} ... "
+	echo -e "  ${boldText}We're going to need some random data for this next step. If it takes long, try  moving the mouse around or typing on the keyboard in a different window.${normalText}"
+	echo -n "  Adding key file as a decryption option for ${luksPart} ... "
 	cryptsetup luksAddKey ${luksPart} "${keyfile}" <<< "${luksPass}"
-	echo "done"
+	echo -e "${green}done${normalText}"
 fi
 
 # unlock LUKS partition
-echo -n "$luksPass" | cryptsetup luksOpen ${luksPart} ${cryptMapper}
+echo -n "  Decrypting newly created LUKS partition ... "
+echo -n "$luksPass" | cryptsetup luksOpen ${luksPart} ${cryptMapper} && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 
 # setup LVM and create logical partitions
 echo "Setting up LVM:"
 pvcreate /dev/mapper/${cryptMapper} > /dev/null 2>&1
 vgcreate vg0 /dev/mapper/${cryptMapper} > /dev/null 2>&1
-echo -n "Creating ${swap} swap logical volume ... "
-lvcreate -n swap -L ${swap} vg0 > /dev/null 2>&1 && echo done || echo failed
-echo -n "Creating ${root} root logical volume ... "
-lvcreate -n root -L ${root} vg0 > /dev/null 2>&1 && echo done || echo failed
+echo -n "  Creating ${swap} swap logical volume ... "
+lvcreate -n swap -L ${swap} vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+echo -n "  Creating ${root} root logical volume ... "
+lvcreate -n root -L ${root} vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 homeSpace=$(bc <<< "$(vgdisplay --units b | grep Free | awk '{print $7}') * $(tr -d '%' <<< $home) / 100" | numfmt --to=iec)
-echo -n "Creating ${homeSpace} home logical volume ... "
-lvcreate -n home -l +${home}free vg0 > /dev/null 2>&1 && echo done || echo failed
+echo -n "  Creating ${homeSpace} home logical volume ... "
+lvcreate -n home -l +${home}free vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 
 # stage one complete; pause and wait for user to perform installation
-echo -e "\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup.\n  ${bootPart} should be used as ext2 for /boot\n$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/vg0-home should be used as ext4 for /home\n  /dev/mapper/vg0-root should be used as ext4 for /\n  /dev/mapper/vg0-swap should be used as swap\n  $disk should be selected as the \"Device for boot loader installation\""
+echo -e "${yellow}${boldText}\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup.\n  ${bootPart} should be used as ext2 for /boot\n$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/vg0-home should be used as ext4 for /home\n  /dev/mapper/vg0-root should be used as ext4 for /\n  /dev/mapper/vg0-swap should be used as swap\n  $disk should be selected as the \"Device for boot loader installation\"${normalText}"
 echo
-read -sp "After installation, once you've chosen the option to continue testing press     [Enter] in this window." && echo
+echo -e "${boldText}After installation, once you've chosen the option to continue testing, press     [Enter] in this window.${normalText}"
+read -s && echo
 
 
 #---------------------------------------------------begin stage two---------------------------------------------------#
@@ -187,14 +241,14 @@ mount ${bootPart} /mnt/boot
 isEFI && mount ${efiPart} /mnt/boot/efi
 mount --bind /dev /mnt/dev
 mount --bind /run/lvm /mnt/run/lvm
-echo "done"
+echo -e "${green}done${normalText}"
 
 # create crypttab entry
 echo -n "Creating /etc/crypttab entry ... "
 luksUUID="$(blkid | grep $luksPart | tr -d '"' | grep -oP "\bUUID=[0-9a-f\-]+")"
 echo -e "${cryptMapper}\t${luksUUID}\tnone\tluks" > /mnt/etc/crypttab
 chmod 600 /mnt/etc/crypttab
-echo "done"
+echo -e "${green}done${normalText}"
 
 # enable trim if requested
 # trim implemented using instructions found at http://blog.neutrino.es/2013/howto-properly-activate-trim-for-your-ssd-on-linux-fstrim-lvm-and-dmcrypt/
@@ -219,7 +273,7 @@ do
 done
 EOF
 	chmod 755 /etc/cron.weekly/dofstrim
-	echo "done"
+	echo -e "${green}done${normalText}"
 fi
 
 # chroot and update the boot files
@@ -375,7 +429,7 @@ if [ "\$(whoami)" != "root" ]; then
 fi
 
 isEFI() {
-	mount | grep -i efi > /dev/null 2>&1 && return 0 || return 1
+	mount | grep -qi efi && return 0 || return 1
 }
 
 extractPayload() {
@@ -387,7 +441,7 @@ extractPayload() {
 }
 
 hasKeyfile() {
-	cryptsetup luksDump $luksPart | grep "Key Slot 0: ENABLED" > /dev/null
+	cryptsetup luksDump $luksPart | grep -q "Key Slot 0: ENABLED"
 }
 
 keyfile=/tmp/LUKS.key
@@ -396,7 +450,7 @@ keyfile=/tmp/LUKS.key
 echo -n "Decrypting LUKS partition ... "
 if hasKeyfile && extractPayload; then
 	cryptsetup open $luksPart ${cryptMapper} -d "\$keyfile"
-	echo "done"
+	echo -e "${green}done${normalText}"
 else
 	echo "waiting for passphrase"
 	read -sp "LUKS encryption passphrase: " luksPass && echo
@@ -414,7 +468,7 @@ done
 mount /dev/vg0/root /mnt
 cp /mnt/etc/crypttab /tmp
 umount /mnt
-echo "done"
+echo -e "${green}done${normalText}"
 
 # stage one complete; pause and wait for user to perform installation
 echo -e "\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup, selecting the option to format \npartitions when available (except /home).\n  ${bootPart} should be used as ext2 for /boot\n\$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/vg0-home should be used as ext4 for /home (DO NOT FORMAT)\n  /dev/mapper/vg0-root should be used as ext4 for /\n  /dev/mapper/vg0-swap should be used as swap\n  $disk should be selected as the \"Device for boot loader installation\""
@@ -429,13 +483,13 @@ mount ${bootPart} /mnt/boot
 isEFI && mount ${efiPart} /mnt/boot/efi
 mount --bind /dev /mnt/dev
 mount --bind /run/lvm /mnt/run/lvm
-echo "done"
+echo -e "${green}done${normalText}"
 
 # create crypttab entry
 echo -n "Restoring crypttab ... "
 mv /tmp/crypttab /mnt/etc/crypttab
 chmod 600 /mnt/etc/crypttab
-echo "done"
+echo -e "${green}done${normalText}"
 
 # chroot and update the boot files
 echo "Updating your boot files:"
@@ -482,7 +536,7 @@ extractPayload() {
 }
 
 hasKeyfile() {
-	cryptsetup luksDump $luksPart | grep "Key Slot 0: ENABLED" > /dev/null
+	cryptsetup luksDump $luksPart | grep -q "Key Slot 0: ENABLED"
 }
 
 useExistingPassphrase() {
@@ -495,9 +549,9 @@ keyfile=/tmp/LUKS.key
 
 echo -n "Extracting decryption key from this script ... "
 if hasKeyfile && extractPayload; then
-	echo "done"
+	echo -e "${green}done${normalText}"
 else
-	echo "failed"
+	echo -e "${red}failed${normalText}"
 	useExistingPassphrase
 fi
 
@@ -512,10 +566,10 @@ do
 done
 
 echo -n "Removing old LUKS passphrase ... "
-cryptsetup luksKillSlot $luksPart 1 -d "\$keyfile" && echo "done" || useExistingPassphrase
+cryptsetup luksKillSlot $luksPart 1 -d "\$keyfile" && echo -e "${green}done${normalText}" || useExistingPassphrase
 echo -n "Adding new LUKS passphrase ... "
 echo -e "\$pwd\n\$pwd" | sudo cryptsetup luksAddKey $luksPart -d "\$keyfile"
-echo "done"
+echo -e "${green}done${normalText}"
 shred -uzn3 "\$keyfile" 2> /dev/null
 
 read -sp "Finished! Press [Enter] to quit." && echo
@@ -529,7 +583,7 @@ if hasKeyfile; then
 	echo
 	name=$(basename "$keyfile")
 	mv "$keyfile" "$dest"
-	echo -e "Your LUKS key file and a passphrase reset script have been saved in \n${dest/\/mnt/} on the installed system. Guard these files because \neither can be used to decrypt your system! \nFollowing your first boot, move these files to a secure location ASAP!"
+	echo -e "${yellow}${boldText}Your LUKS key file and a passphrase reset script have been saved in \n${dest/\/mnt/} on the installed system. Guard these files because \neither can be used to decrypt your system! \nFollowing your first boot, move these files to a secure location ASAP! ${normalText}"
 fi
 
 chmod 400 "$dest/"*
@@ -537,7 +591,7 @@ chmod u+x "$dest/"*.sh
 chown -R 1000:1000 "$dest"
 
 echo
-echo "All finished!"
+echo  -e"${green}All finished!${normalText}"
 echo -e "After rebooting your system, you will be able to decrypt with the passphrase you\nprovided or the key file you saved."
 read -sp "Press [Enter] to reboot" && echo
 reboot

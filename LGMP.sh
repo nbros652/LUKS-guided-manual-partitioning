@@ -108,9 +108,10 @@ while :
 do
 	echo "Nothing will be displayed as you type passphrases!"
 	read -sp "Encryption passphrase: " luksPass && echo
+	[ "$luksPass" == "" ] && echo "Oops, looks like you forgot to provide a passphrase. Try again." && continue
 	read -sp "Confirm encryption passphrase: " confirm
 	clear
-	[ "$luksPass" == "$confirm" ] && [ "$luksPass" == "" ] break
+	[ "$luksPass" == "$confirm" ] && break
 echo "passphrases didn't match or passphrase was blank! Try again"
 done
 echo  -e 'In addition to the passphrase you provided, a keyfile can be generated that can \nalso be used for decryption. It is STRONGLY RECOMMENDED that you create this \nfile and store it in a secure location to be used in the event that you ever \nforget your passphrase!\n'

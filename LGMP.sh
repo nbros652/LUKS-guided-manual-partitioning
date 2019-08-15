@@ -110,8 +110,8 @@ do
 	read -sp "Encryption passphrase: " luksPass && echo
 	read -sp "Confirm encryption passphrase: " confirm
 	clear
-	[ "$luksPass" == "$confirm" ] && break
-echo "passphrases didn't match! Try again"
+	[ "$luksPass" == "$confirm" ] && [ "$luksPass" == "" ] break
+echo "passphrases didn't match or passphrase was blank! Try again"
 done
 echo  -e 'In addition to the passphrase you provided, a keyfile can be generated that can \nalso be used for decryption. It is STRONGLY RECOMMENDED that you create this \nfile and store it in a secure location to be used in the event that you ever \nforget your passphrase!\n'
 read -p "Key file size in bytes, or 'none' to prevent key file creation [512]: " keyfileSize
@@ -164,6 +164,13 @@ getDiskPartitionByNumber() {
 		# partitions for this disk follow a SATA, IDE, SCSI naming standard
 		part="${disk}${partNum}"
 	fi
+	
+	# wait until partition is visible to the system; fixes NVMe race condition following partition creation
+	while [ ! -e "${part}" ]
+	do
+		sleep .5
+	done
+	
 	echo "$part"
 }
 

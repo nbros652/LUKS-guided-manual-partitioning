@@ -87,6 +87,7 @@ hasKeyfile() {
 }
 
 # wipe the disk partition info and create new gpt partition table
+echo 'Wiping the disk, THIS MAY TAKE A WHILE!..'
 dd if=/dev/zero of=$disk bs=1M count=10 2> /dev/null
 if isEFI; then
 	tableType='gpt'

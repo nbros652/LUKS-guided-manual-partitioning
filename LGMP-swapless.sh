@@ -96,11 +96,9 @@ fi
 parted $disk mktable $tableType > /dev/null 2>&1
 
 # get information about desired sizes
-totalRAM=$(cat /proc/meminfo | head -n1 | grep -oP "\d+.*" | tr -d ' B' | tr 'a-z' 'A-Z' | numfmt --from iec --to iec --format "%.f")
 read -p "Size for /boot [2G]: " boot
 isEFI && read -p "Size for /boot/efi [100M]: " efi
 read -p "Size for LVM [remaining disk space]: " lvm
-read -p "Size for swap in LVM [$totalRAM]: " swap
 read -p "Size for / (root) in LVM [32G]: " root
 read -p "Percent of remaining LVM space to use for /home [100%]: " home
 echo
@@ -122,7 +120,7 @@ hasKeyfile && dd if=/dev/urandom of="${keyfile}" bs=${keyfileSize} count=1 2> /d
 
 clear
 # fill in the blanks with default values
-parts="efi=100M boot=2G lvm=-1MB swap=${totalRAM} root=32G home=100%"
+parts="efi=100M boot=2G lvm=-1MB root=32G home=100%"
 for part in $parts
 do
 	name=$(cut -f1 -d= <<< $part)
@@ -199,17 +197,15 @@ echo -n "$luksPass" | cryptsetup luksOpen ${luksPart} ${cryptMapper} && echo -e 
 # setup LVM and create logical partitions
 echo "Setting up LVM:"
 pvcreate /dev/mapper/${cryptMapper} > /dev/null 2>&1
-vgcreate vg0 /dev/mapper/${cryptMapper} > /dev/null 2>&1
-echo -n "  Creating ${swap} swap logical volume ... "
-lvcreate -n swap -L ${swap} vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+vgcreate ubuntu /dev/mapper/${cryptMapper} > /dev/null 2>&1
 echo -n "  Creating ${root} root logical volume ... "
-lvcreate -n root -L ${root} vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+lvcreate -n root -L ${root} ubuntu > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 homeSpace=$(bc <<< "$(vgdisplay --units b | grep Free | awk '{print $7}') * $(tr -d '%' <<< $home) / 100" | numfmt --to=iec)
 echo -n "  Creating ${homeSpace} home logical volume ... "
-lvcreate -n home -l +${home}free vg0 > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
+lvcreate -n home -l +${home}free ubuntu > /dev/null 2>&1 && echo -e "${green}done${normalText}" || echo -e "${red}failed${normalText}"
 
 # stage one complete; pause and wait for user to perform installation
-echo -e "${yellow}${boldText}\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup.\n  ${bootPart} should be used as ext2 for /boot\n$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/vg0-home should be used as ext4 for /home\n  /dev/mapper/vg0-root should be used as ext4 for /\n  /dev/mapper/vg0-swap should be used as swap\n  $disk should be selected as the \"Device for boot loader installation\"${normalText}"
+echo -e "${yellow}${boldText}\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup.\n  ${bootPart} should be used as ext2 for /boot\n$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/ubuntu-home should be used as ext4 for /home\n  /dev/mapper/ubuntu-root should be used as ext4 for /\n  $disk should be selected as the \"Device for boot loader installation\"${normalText}"
 echo
 echo -e "${boldText}After installation, once you've chosen the option to continue testing, press     [Enter] in this window.${normalText}"
 read -s && echo
@@ -226,8 +222,8 @@ doTrim() { [ "${trim,,}" == 'y' ] || return -1; }
 
 # mount stuff for chroot
 echo -n "Mounting the installed system ... "
-mount /dev/vg0/root /mnt
-mount /dev/vg0/home /mnt/home
+mount /dev/ubuntu/root /mnt
+mount /dev/ubuntu/home /mnt/home
 mount ${bootPart} /mnt/boot
 isEFI && mount ${efiPart} /mnt/boot/efi
 mount --bind /dev /mnt/dev
@@ -297,7 +293,8 @@ echo -e "<!DOCTYPE html>
 				padding: 0;
 				margin: 0;
 				background-color: aliceblue;
-				background-image: url('data:image/png;base64,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');
+				background-image: url('data:image/png;base64,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');
 				font-family: sans-serif;
 			}
 			
@@ -361,7 +358,7 @@ echo -e "<!DOCTYPE html>
 				<hr/>
 				<div class='section'><a name='about-luks' />
 					<div class='title'>About LUKS</div>
-					<p>LUKS stands for Linux Unified Key Setup. It is the standard for disk encryption in Linux. It can be used to encrypt an entire disk, a partition, or a file container. In the case of full disk encryption (FDE) on Ubuntu, the disk is typically partitioned into two (non-EFI installation) or three (EFI installation) separate partitions. The partitions needed for booting are not encrypted as they contain the binaries necessary for performing decryption. The last partition is encrypted, and then LVM logical volumes are created within that partition for swap and root. To learn more about LUKS visit the <a href='https://gitlab.com/cryptsetup/cryptsetup'>LUKS homepage</a>.</p>
+					<p>LUKS stands for Linux Unified Key Setup. It is the standard for disk encryption in Linux. It can be used to encrypt an entire disk, a partition, or a file container. In the case of full disk encryption (FDE) on Ubuntu, the disk is typically partitioned into two (non-EFI installation) or three (EFI installation) separate partitions. The partitions needed for booting are not encrypted as they contain the binaries necessary for performing decryption. The last partition is encrypted, and then LVM logical volumes are created within that partition for root. To learn more about LUKS visit the <a href='https://gitlab.com/cryptsetup/cryptsetup'>LUKS homepage</a>.</p>
 				</div>
 				<div class='section'><a name='action' />
 					<div class='title'>Before you do anything else</div>
@@ -382,7 +379,7 @@ echo -e "<!DOCTYPE html>
 				</div>
 				<div class='section'><a name='this-setup' />
 					<div class='title'>About this installation</div>
-					<p>The script you used to set up this encrypted installation configured everything mostly the same manner that the automated feature in the Ubuntu installer would have. The physical partitions are created as they would have been with the automated installer except that you were given the option of specifying custom sizes during setup. The encrypted partition itself uses a key size of 512 bytes rather than 256, and the hashing algorithm used is sha512 rather than sha256. The LUKS partition, once unlocked, contains an LVM physical volume that houses the swap, root, and home partitions. This is the same as what you would find with the automated installer except that the automated installer does not create a home partition, and of course, you were given the option of setting custom sizes for each of these partitions.</p>
+					<p>The script you used to set up this encrypted installation configured everything mostly the same manner that the automated feature in the Ubuntu installer would have. The physical partitions are created as they would have been with the automated installer except that you were given the option of specifying custom sizes during setup. The encrypted partition itself uses a key size of 512 bytes rather than 256, and the hashing algorithm used is sha512 rather than sha256. The LUKS partition, once unlocked, contains an LVM physical volume that houses the root and home partitions. This is the same as what you would find with the automated installer except that the automated installer does not create a home partition, and of course, you were given the option of setting custom sizes for each of these partitions.</p>
 					<p>LUKS encryption allows for multiple decryption keys. Any saved passphrase or key file can be used to decrypt a LUKS encrypted device or file. If you created a key file, your system has exactly two keys.</p>
 					<ul>
 						<li>Key slot 0: contains the key file created <em>(empty if no key file was created)</em></li>
@@ -453,23 +450,23 @@ fi
 echo -n "Backing up existing crypttab ... "
 while :
 do
-	[ -e /dev/vg0/root ] && break
+	[ -e /dev/ubuntu/root ] && break
 	sleep .1
 done
-mount /dev/vg0/root /mnt
+mount /dev/ubuntu/root /mnt
 cp /mnt/etc/crypttab /tmp
 umount /mnt
 echo -e "${green}done${normalText}"
 
 # stage one complete; pause and wait for user to perform installation
-echo -e "\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup, selecting the option to format \npartitions when available (except /home).\n  ${bootPart} should be used as ext2 for /boot\n\$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/vg0-home should be used as ext4 for /home (DO NOT FORMAT)\n  /dev/mapper/vg0-root should be used as ext4 for /\n  /dev/mapper/vg0-swap should be used as swap\n  $disk should be selected as the \"Device for boot loader installation\""
+echo -e "\n\nAt this point, you should KEEP THIS WINDOW OPEN and start the installation \nprocess. When you reach the \"Installation type\" page, select \"Something else\" \nand continue to manual partition setup, selecting the option to format \npartitions when available (except /home).\n  ${bootPart} should be used as ext2 for /boot\n\$(isEFI && echo "  ${efiPart} should be used as EFI System Partition\n")  /dev/mapper/ubuntu-home should be used as ext4 for /home (DO NOT FORMAT)\n  /dev/mapper/ubuntu-root should be used as ext4 for /\n  $disk should be selected as the \"Device for boot loader installation\""
 echo
 read -sp "After installation, once you've chosen the option to continue testing, press    [Enter] in this window." && echo
 
 # mount stuff for chroot
 echo -n "Mounting the installed system ... "
-mount /dev/vg0/root /mnt
-mount /dev/vg0/home /mnt/home
+mount /dev/ubuntu/root /mnt
+mount /dev/ubuntu/home /mnt/home
 mount ${bootPart} /mnt/boot
 isEFI && mount ${efiPart} /mnt/boot/efi
 mount --bind /dev /mnt/dev

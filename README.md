@@ -5,3 +5,7 @@ In short, LGMP enables you to set up an encrypted Ubuntu installation with semi-
 In addition, LGMP creates some useful scripts on the desktop that can be used to change the encryption passphrase or recover from a forgotten passphrase, recover from corrupted LUKS headers, and reinstall to the same encrypted setup, keeping /home intact.
 
 Simply copy the LGMP.sh script to a system running a Live Ubuntu OS from USB or DVD, and run it. It will walk you through the process step-by-step. Have multiple disks and you want to install to /dev/sdb? No problem. The script can handle that.
+
+This script has been tested on the following Ubuntu OSs:
+  * 18.04
+  * 20.04
